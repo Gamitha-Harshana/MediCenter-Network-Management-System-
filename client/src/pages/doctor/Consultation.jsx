@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import api from '../../utils/api';
@@ -13,14 +13,41 @@ const DRUG_TYPE_UNITS = {
   Cream: 'g', Drops: 'drop(s)', Other: 'unit(s)',
 };
 
-const emptyRx = () => ({ drug_id: '', drug_name: '', drug_type: 'Tablet', times_per_day: 1, dosage_per_time: 1, number_of_days: 3 });
-const emptyExtRx = () => ({ external_drug_name: '', drug_type: 'Tablet', times_per_day: 1, dosage_per_time: 1, number_of_days: 3 });
+const emptyRx = () => ({
+  drug_id: '',
+  drug_name: '',
+  drug_type: 'Tablet',
+  dosage_unit: 'tablet(s)',
+  times_per_day: 1,
+  dosage_per_time: 1,
+  number_of_days: 3,
+  is_external: 0
+});
+
+const emptyExtRx = () => ({
+  external_drug_name: '',
+  drug_type: 'Tablet',
+  dosage_unit: 'tablet(s)',
+  times_per_day: 1,
+  dosage_per_time: 1,
+  number_of_days: 3,
+  is_external: 1
+});
+
 const emptyTest = () => ({ test_name: '' });
 
 export default function Consultation() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { appointment, patient } = location.state || {};
+  const { appointment, patient: statePatient } = location.state || {};
+  const patient = statePatient || (appointment ? {
+    patient_id: appointment.patient_id,
+    name: appointment.patient_name,
+    phone: appointment.phone,
+    email: appointment.email,
+    date_of_birth: appointment.date_of_birth,
+    patient_type: appointment.patient_type_str || (appointment.patient_type === 1 ? 'Registered' : 'Temporary')
+  } : null);
 
   const [symptoms, setSymptoms] = useState('');
   const [diagnosis, setDiagnosis] = useState('');
@@ -57,9 +84,15 @@ export default function Consultation() {
     updated[idx] = { ...updated[idx], [field]: val };
     if (field === 'drug_id') {
       const drug = drugs.find(d => d.drug_id === val);
-      if (drug) { updated[idx].drug_name = drug.drug_name; updated[idx].drug_type = drug.drug_type; }
+      if (drug) {
+        updated[idx].drug_name = drug.drug_name;
+        updated[idx].drug_type = drug.drug_type || 'Tablet';
+        updated[idx].dosage_unit = drug.dosage_unit || DRUG_TYPE_UNITS[drug.drug_type] || 'unit(s)';
+      }
     }
-    if (field === 'drug_type') updated[idx].dosage_unit = DRUG_TYPE_UNITS[val] || 'unit(s)';
+    if (field === 'drug_type') {
+      updated[idx].dosage_unit = DRUG_TYPE_UNITS[val] || 'unit(s)';
+    }
     setPrescriptions(updated);
   };
   const addRx = () => setPrescriptions([...prescriptions, emptyRx()]);
@@ -68,6 +101,9 @@ export default function Consultation() {
   const updateExtRx = (idx, field, val) => {
     const updated = [...externalPrescriptions];
     updated[idx] = { ...updated[idx], [field]: val };
+    if (field === 'drug_type') {
+      updated[idx].dosage_unit = DRUG_TYPE_UNITS[val] || 'unit(s)';
+    }
     setExternalPrescriptions(updated);
   };
   const addExtRx = () => setExternalPrescriptions([...externalPrescriptions, emptyExtRx()]);
@@ -106,14 +142,40 @@ export default function Consultation() {
     const validExtRx = externalPrescriptions.filter(p => p.external_drug_name?.trim());
     const validTests = tests.filter(t => t.test_name?.trim());
 
+    const allPrescriptions = [
+      ...validRx.map(p => ({
+        drug_id: p.drug_id,
+        drug_name: p.drug_name,
+        drug_type: p.drug_type || 'Tablet',
+        times_per_day: Number(p.times_per_day) || 1,
+        dosage_per_time: Number(p.dosage_per_time) || 1,
+        dosage_unit: p.dosage_unit || (DRUG_TYPE_UNITS[p.drug_type] || 'tablet(s)'),
+        number_of_days: Number(p.number_of_days) || 1,
+        is_external: 0,
+      })),
+      ...validExtRx.map(p => ({
+        external_drug_name: p.external_drug_name,
+        drug_type: p.drug_type || 'Tablet',
+        times_per_day: Number(p.times_per_day) || 1,
+        dosage_per_time: Number(p.dosage_per_time) || 1,
+        dosage_unit: p.dosage_unit || (DRUG_TYPE_UNITS[p.drug_type] || 'tablet(s)'),
+        number_of_days: Number(p.number_of_days) || 1,
+        is_external: 1,
+      })),
+    ];
+
     saveMutation.mutate({
+      appointment_id: appointment?.appointment_id,
       appointmentId: appointment?.appointment_id,
+      patient_id: patient?.patient_id,
       patientId: patient?.patient_id,
+      visit_date: appointment?.visit_date || format(new Date(), 'yyyy-MM-dd'),
+      visitDate: appointment?.visit_date || format(new Date(), 'yyyy-MM-dd'),
       symptoms,
       diagnosis,
-      prescriptions: validRx,
-      externalPrescriptions: validExtRx,
+      prescriptions: allPrescriptions,
       tests: validTests,
+      revisit: revisitDate ? { revisit_date: revisitDate } : null,
       revisitDate: revisitDate || null,
     });
   };
@@ -243,7 +305,7 @@ export default function Consultation() {
               <input type="number" min={1} className="input text-sm" value={rx.times_per_day} onChange={e => updateRx(idx, 'times_per_day', +e.target.value)} />
             </div>
             <div className="col-span-2">
-              <label className="label text-xs">Dose ({DRUG_TYPE_UNITS[rx.drug_type]})</label>
+              <label className="label text-xs">Dose ({rx.dosage_unit || DRUG_TYPE_UNITS[rx.drug_type]})</label>
               <input type="number" min={0.5} step={0.5} className="input text-sm" value={rx.dosage_per_time} onChange={e => updateRx(idx, 'dosage_per_time', +e.target.value)} />
             </div>
             <div className="col-span-2">
@@ -280,7 +342,7 @@ export default function Consultation() {
               <input type="number" min={1} className="input text-sm" value={rx.times_per_day} onChange={e => updateExtRx(idx, 'times_per_day', +e.target.value)} />
             </div>
             <div className="col-span-2">
-              <label className="label text-xs">Dose ({DRUG_TYPE_UNITS[rx.drug_type]})</label>
+              <label className="label text-xs">Dose ({rx.dosage_unit || DRUG_TYPE_UNITS[rx.drug_type]})</label>
               <input type="number" min={0.5} step={0.5} className="input text-sm" value={rx.dosage_per_time} onChange={e => updateExtRx(idx, 'dosage_per_time', +e.target.value)} />
             </div>
             <div className="col-span-2">

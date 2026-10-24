@@ -79,7 +79,7 @@ function PrintablePrescription({ details }) {
             <tbody>
               {external_prescriptions.map((p, i) => (
                 <tr key={i}>
-                  <td className="border border-gray-200 px-2 py-1">{p.external_drug_name}</td>
+                  <td className="border border-gray-200 px-2 py-1">{p.external_drug_name || p.drug_name}</td>
                   <td className="border border-gray-200 px-2 py-1 text-center">{p.drug_type}</td>
                   <td className="border border-gray-200 px-2 py-1 text-center">{p.times_per_day}</td>
                   <td className="border border-gray-200 px-2 py-1 text-center">{p.dosage_per_time} {p.dosage_unit}</td>
@@ -133,7 +133,7 @@ function NotificationItem({ notif }) {
 
   const handleLoadAndPrint = async () => {
     await loadDetails();
-    if (!notif.status === 'Read') markReadMutation.mutate();
+    if (notif.status !== 'Read') markReadMutation.mutate();
     setTimeout(handlePrint, 200);
   };
 

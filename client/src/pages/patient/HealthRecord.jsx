@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../../utils/api';
 import LoadingSpinner from '../../components/UI/LoadingSpinner';
@@ -12,22 +12,25 @@ export default function HealthRecord() {
   const [shareCross, setShareCross] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
-  const { isLoading } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['health-record'],
     queryFn: () => api.get('/patient/health-record').then(r => r.data),
-    onSuccess: (data) => {
-      if (!loaded) {
-        setNotes(data.record?.notes || '');
-        setViewable(data.record?.viewable_by_doctors || false);
-        setShareCross(data.record?.share_cross_center || false);
-        setLoaded(true);
-      }
-    },
   });
+
+  useEffect(() => {
+    if (data?.record && !loaded) {
+      setNotes(data.record.notes || '');
+      setViewable(Boolean(data.record.viewable_by_doctors));
+      setShareCross(Boolean(data.record.share_cross_center));
+      setLoaded(true);
+    }
+  }, [data, loaded]);
 
   const saveMutation = useMutation({
     mutationFn: () => api.put('/patient/health-record', {
       notes,
+      viewable_by_doctors: viewable,
+      share_cross_center: shareCross,
       viewableByDoctors: viewable,
       shareCrossCenter: shareCross,
     }),

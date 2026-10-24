@@ -19,14 +19,18 @@ router.delete('/schedules/:id', ctrl.deleteSchedule);
 
 // Patients
 router.get('/patients', ctrl.getPatients);
+router.get('/patients/registered', (req, res, next) => { req.query.type = 'Registered'; next(); }, ctrl.getPatients);
+router.get('/patients/temporary', (req, res, next) => { req.query.type = 'Temporary'; next(); }, ctrl.getPatients);
 router.post('/patients/temporary', ctrl.createTemporaryPatient);
 router.post('/patients/temporary/:patientId/appointment', ctrl.bookAppointmentForTemp);
+router.post('/patients/:patientId/appointment', ctrl.bookAppointmentForTemp);
 
 // Drug Inventory
 router.get('/inventory/log', ctrl.getInventoryLog);
 router.get('/inventory', ctrl.getDrugInventory);
 router.post('/inventory', ctrl.addDrug);
 router.put('/inventory/:id', ctrl.updateDrug);
+router.patch('/inventory/:id/quantity', ctrl.updateDrug);
 router.delete('/inventory/:id', ctrl.removeDrug);
 
 // Deletion Requests

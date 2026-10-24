@@ -26,7 +26,7 @@ export default function Schedules() {
   });
 
   const addMutation = useMutation({
-    mutationFn: (data) => api.post('/admin/schedules', data),
+    mutationFn: (data) => api.post('/admin/schedules', { ...data, doctor_id: data.doctorId }),
     onSuccess: () => {
       toast.success('Schedule added!');
       setModalOpen(false);
@@ -50,8 +50,15 @@ export default function Schedules() {
   // Group schedules by doctor
   const byDoctor = {};
   schedules.forEach((s) => {
-    const key = s.doctor?.id ?? s.doctorId;
-    if (!byDoctor[key]) byDoctor[key] = { doctor: s.doctor, schedules: [] };
+    const key = s.doctor_id || s.doctorId || s.doctor?.id;
+    const docName = s.doctor_name || s.doctor?.name || 'Doctor';
+    const specialty = s.specialty || s.doctor?.specialty || '';
+    if (!byDoctor[key]) {
+      byDoctor[key] = {
+        doctor: { id: key, name: docName, specialty },
+        schedules: []
+      };
+    }
     byDoctor[key].schedules.push(s);
   });
 
@@ -78,17 +85,17 @@ export default function Schedules() {
         <div className="space-y-5">
           {Object.values(byDoctor).map(({ doctor, schedules: ds }) => (
             <div key={doctor?.id} className="card">
-              <h3 className="font-semibold text-gray-800 mb-3">{doctor?.name ?? 'Unknown Doctor'}</h3>
+              <h3 className="font-semibold text-gray-800 mb-3">Dr. {doctor?.name ?? 'Unknown Doctor'} ({doctor?.specialty})</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 {ds.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between p-3 bg-blue-50 rounded-xl border border-blue-100">
+                  <div key={s.schedule_id || s.id} className="flex items-center justify-between p-3 bg-blue-50 rounded-xl border border-blue-100">
                     <div>
                       <p className="text-sm font-semibold text-blue-800">{s.day_of_week}</p>
                       <p className="text-xs text-blue-600 mt-0.5">{s.start_time} – {s.end_time}</p>
                       <p className="text-xs text-gray-500 mt-0.5">Max {s.patient_amount} patients</p>
                     </div>
                     <button
-                      onClick={() => deleteMutation.mutate(s.id)}
+                      onClick={() => deleteMutation.mutate(s.schedule_id || s.id)}
                       className="text-xs text-red-500 hover:text-red-700 font-medium ml-2"
                     >
                       Remove
@@ -108,8 +115,8 @@ export default function Schedules() {
             <label className="label">Doctor</label>
             <select className="input" value={form.doctorId} onChange={set('doctorId')} required>
               <option value="">Select doctor…</option>
-              {doctors.filter(d => d.status === 'approved').map((d) => (
-                <option key={d.id} value={d.id}>{d.name} – {d.specialty}</option>
+              {doctors.filter(d => (d.approval_status === 'Approved' || d.status === 'approved')).map((d) => (
+                <option key={d.doctor_id || d.id} value={d.doctor_id || d.id}>Dr. {d.name} – {d.specialty}</option>
               ))}
             </select>
           </div>

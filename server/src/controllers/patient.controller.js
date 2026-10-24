@@ -1,4 +1,5 @@
 const { v4: uuidv4 } = require('uuid');
+const QRCode = require('qrcode');
 const db = require('../config/db');
 const { generateQRCode } = require('../utils/qrcode');
 
@@ -51,13 +52,81 @@ const updateProfile = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// GET /api/patient/centers/search
+// GET /api/patient/centers/:centerId/doctors
+// Returns approved doctors + their schedules for a center
+// ─────────────────────────────────────────────────────────────
+const getCenterDoctors = async (req, res) => {
+  try {
+    const { centerId } = req.params;
+
+    const doctors = await db.query(
+      `SELECT doctor_id, name, specialty, slmc_number
+       FROM doctor
+       WHERE center_id = ? AND approval_status = 'Approved'
+       ORDER BY name ASC`,
+      [centerId]
+    );
+
+    // Attach schedules to each doctor
+    const enriched = await Promise.all(doctors.rows.map(async (doc) => {
+      const schedules = await db.query(
+        `SELECT day_of_week, start_time, end_time, patient_amount
+         FROM schedule WHERE doctor_id = ? AND is_active = 1`,
+        [doc.doctor_id]
+      );
+      return { ...doc, schedules: schedules.rows };
+    }));
+
+    return res.json({ doctors: enriched });
+  } catch (err) {
+    console.error('getCenterDoctors error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/patient/centers/:centerId/queue-info
+// Returns booked count vs limit for a doctor on a date
+// ─────────────────────────────────────────────────────────────
+const getQueueInfo = async (req, res) => {
+  try {
+    const { doctorId, date } = req.query;
+    if (!doctorId || !date) return res.status(400).json({ error: 'doctorId and date required' });
+
+    const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const dayName = days[new Date(date).getUTCDay()];
+
+    const [scheduleRes, countRes] = await Promise.all([
+      db.query('SELECT patient_amount FROM schedule WHERE doctor_id = ? AND day_of_week = ? AND is_active = 1', [doctorId, dayName]),
+      db.query("SELECT COUNT(*) AS cnt FROM appointment WHERE doctor_id = ? AND visit_date = ? AND status IN ('Active','CheckedIn')", [doctorId, date])
+    ]);
+
+    if (!scheduleRes.rows[0]) return res.json({ booked: 0, limit: 0, available: false });
+
+    const limit = scheduleRes.rows[0].patient_amount;
+    const booked = countRes.rows[0].cnt;
+    return res.json({ booked, limit, available: booked < limit });
+  } catch (err) {
+    console.error('getQueueInfo error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+
 // Query: lat, lon, specialty, date
 // Returns approved centers, ordered by distance if lat/lon supplied
 // ─────────────────────────────────────────────────────────────
 const searchCenters = async (req, res) => {
   try {
-    const { lat, lon, specialty, date } = req.query;
+    const { lat, lon, specialty, date, day } = req.query;
+    // Support both ?date=YYYY-MM-DD (converts to day name) and ?day=Monday (direct)
+    let dayName = null;
+    if (day) {
+      dayName = day; // frontend sends day name directly
+    } else if (date) {
+      const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      dayName = days[new Date(date).getUTCDay()];
+    }
 
     const params = [];
     let selectClause = `SELECT DISTINCT mc.center_id, mc.center_name, mc.location,
@@ -75,24 +144,26 @@ const searchCenters = async (req, res) => {
     }
 
     let fromClause = ' FROM medi_center mc';
-    const needsDoctorJoin = specialty || date;
+    const needsDoctorJoin = specialty || dayName;
     if (needsDoctorJoin) {
       fromClause += `
         JOIN doctor d ON d.center_id = mc.center_id AND d.approval_status = 'Approved'
         JOIN schedule s ON s.doctor_id = d.doctor_id AND s.is_active = 1`;
     }
 
-    let whereClause = " WHERE mc.approval_status = 'Approved' AND mc.latitude IS NOT NULL AND mc.longitude IS NOT NULL";
+    let whereClause = " WHERE mc.approval_status = 'Approved'";
+
+    // Only filter by lat/lon presence when sorting by distance
+    if (lat && lon) {
+      whereClause += ' AND mc.latitude IS NOT NULL AND mc.longitude IS NOT NULL';
+    }
 
     if (specialty) {
       params.push(`%${specialty}%`);
       whereClause += ' AND d.specialty LIKE ?';
     }
 
-    if (date) {
-      const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-      const dateObj = new Date(date);
-      const dayName = days[dateObj.getUTCDay()];
+    if (dayName) {
       params.push(dayName);
       whereClause += ' AND s.day_of_week = ?';
     }
@@ -254,7 +325,26 @@ const getAppointments = async (req, res) => {
        ORDER BY a.visit_date DESC, a.queue_no ASC`,
       [patientId]
     );
-    return res.json({ appointments: result.rows });
+
+    const appointments = await Promise.all(
+      result.rows.map(async (appt) => {
+        let qr_code_data_url = null;
+        if (appt.qr_code_data) {
+          try {
+            qr_code_data_url = await QRCode.toDataURL(appt.qr_code_data, { errorCorrectionLevel: 'H' });
+          } catch (e) {
+            console.error('QRCode conversion error:', e);
+          }
+        }
+        return {
+          ...appt,
+          qr_code_data_url,
+          doctor_specialty: appt.specialty,
+        };
+      })
+    );
+
+    return res.json({ appointments });
   } catch (err) {
     console.error('getAppointments error:', err);
     return res.status(500).json({ error: 'Internal server error' });
@@ -328,7 +418,9 @@ const getHealthRecord = async (req, res) => {
 const updateHealthRecord = async (req, res) => {
   try {
     const { id: patientId } = req.user;
-    const { notes, viewable_by_doctors, share_cross_center } = req.body;
+    const { notes, viewable_by_doctors, share_cross_center, viewableByDoctors, shareCrossCenter } = req.body;
+    const viewable = viewable_by_doctors !== undefined ? viewable_by_doctors : viewableByDoctors;
+    const shareCross = share_cross_center !== undefined ? share_cross_center : shareCrossCenter;
 
     // Ensure record exists first
     const existsRes = await db.query(
@@ -352,8 +444,8 @@ const updateHealthRecord = async (req, res) => {
        WHERE patient_id = ?`,
       [
         notes !== undefined ? notes : null,
-        viewable_by_doctors !== undefined ? viewable_by_doctors : null,
-        share_cross_center !== undefined ? share_cross_center : null,
+        viewable !== undefined ? viewable : null,
+        shareCross !== undefined ? shareCross : null,
         patientId
       ]
     );
@@ -459,7 +551,8 @@ const getVisitHistory = async (req, res) => {
         ...record,
         prescriptions: prescriptions.rows,
         tests: tests.rows,
-        revisit: revisit.rows[0] || null
+        revisit: revisit.rows[0] || null,
+        revisit_date: revisit.rows[0]?.revisit_date || null
       };
     }));
 
@@ -474,6 +567,8 @@ module.exports = {
   getProfile,
   updateProfile,
   searchCenters,
+  getCenterDoctors,
+  getQueueInfo,
   bookAppointment,
   getAppointments,
   cancelAppointment,

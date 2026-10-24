@@ -29,7 +29,7 @@ export default function DeletionRequests() {
     onError: (err) => toast.error(err.response?.data?.error || 'Action failed'),
   });
 
-  const requests = data?.requests || [];
+  const requests = Array.isArray(data) ? data : (data?.requests || []);
 
   const openModal = (req, action) => { setSelectedReq(req); setModalAction(action); setNote(''); };
 

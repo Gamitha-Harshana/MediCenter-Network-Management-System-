@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Cache & Build
+client/build/
+.eslintcache
+client/node_modules/.cache/
+*.log
+
+# System files
+.DS_Store
+Thumbs.db

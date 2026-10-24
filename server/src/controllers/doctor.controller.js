@@ -37,7 +37,7 @@ const getDashboard = async (req, res) => {
 
     // Fetch today's queue list
     const queueRes = await db.query(
-      `SELECT a.*, p.name AS patient_name, p.phone, p.patient_type AS patient_type_str
+      `SELECT a.*, p.name AS patient_name, p.phone, p.email, p.date_of_birth, p.patient_type AS patient_type_str
        FROM appointment a
        JOIN patient p ON p.patient_id = a.patient_id
        WHERE a.doctor_id = ? AND a.visit_date = ?
@@ -67,7 +67,7 @@ const getQueue = async (req, res) => {
     const date = req.query.date || new Date().toISOString().split('T')[0];
 
     const result = await db.query(
-      `SELECT a.*, p.name AS patient_name, p.phone, p.patient_type AS patient_type_str
+      `SELECT a.*, p.name AS patient_name, p.phone, p.email, p.date_of_birth, p.patient_type AS patient_type_str
        FROM appointment a
        JOIN patient p ON p.patient_id = a.patient_id
        WHERE a.doctor_id = ? AND a.visit_date = ?
@@ -328,33 +328,48 @@ const saveConsultation = async (req, res) => {
     await conn.beginTransaction();
 
     const { id: doctorId, centerId } = req.user;
-    const {
-      patient_id,
-      appointment_id,
-      visit_date,
-      symptoms,
-      diagnosis,
-      prescriptions = [],
-      tests = [],
-      revisit
-    } = req.body;
+    const patient_id = req.body.patient_id || req.body.patientId;
+    const appointment_id = req.body.appointment_id || req.body.appointmentId;
+    let visit_date = req.body.visit_date || req.body.visitDate;
+    const symptoms = req.body.symptoms;
+    const diagnosis = req.body.diagnosis;
+    const tests = req.body.tests || [];
 
-    if (!patient_id || !visit_date) {
+    // Support both separate externalPrescriptions and merged prescriptions
+    let prescriptions = [...(req.body.prescriptions || [])];
+    if (req.body.externalPrescriptions && Array.isArray(req.body.externalPrescriptions)) {
+      prescriptions = [
+        ...prescriptions,
+        ...req.body.externalPrescriptions.map((p) => ({ ...p, is_external: 1 }))
+      ];
+    }
+
+    // Support revisitDate string or revisit object
+    let revisit = req.body.revisit;
+    if (!revisit && req.body.revisitDate) {
+      revisit = { revisit_date: req.body.revisitDate };
+    }
+
+    if (!visit_date) {
+      visit_date = new Date().toISOString().split('T')[0];
+    }
+
+    if (!patient_id) {
       await conn.rollback();
       conn.release();
-      return res.status(400).json({ error: 'patient_id and visit_date are required' });
+      return res.status(400).json({ error: 'patient_id is required' });
     }
 
     // Verify appointment belongs to this doctor if provided
     if (appointment_id) {
       const [apptRows] = await conn.execute(
-        "SELECT * FROM appointment WHERE appointment_id = ? AND doctor_id = ? AND status = 'CheckedIn'",
+        "SELECT * FROM appointment WHERE appointment_id = ? AND doctor_id = ? AND status IN ('CheckedIn', 'Active')",
         [appointment_id, doctorId]
       );
       if (!apptRows[0]) {
         await conn.rollback();
         conn.release();
-        return res.status(400).json({ error: 'Appointment not found or not in CheckedIn status' });
+        return res.status(400).json({ error: 'Appointment not found or not in CheckedIn/Active status' });
       }
     }
 
@@ -369,9 +384,16 @@ const saveConsultation = async (req, res) => {
 
     // 2. Save prescriptions and reduce stock for internal drugs
     for (const rx of prescriptions) {
-      if (!rx.is_external && rx.drug_id) {
+      const dosageUnit = rx.dosage_unit || 'unit(s)';
+      const drugType = rx.drug_type || 'Tablet';
+      const timesPerDay = parseInt(rx.times_per_day) || 1;
+      const dosagePerTime = parseFloat(rx.dosage_per_time) || 1;
+      const numDays = parseInt(rx.number_of_days) || 1;
+      const isExternal = rx.is_external ? 1 : 0;
+
+      if (!isExternal && rx.drug_id) {
         // Calculate total dosage to dispense: dosage_per_time * times_per_day * number_of_days
-        const totalQty = parseFloat(rx.dosage_per_time) * parseInt(rx.times_per_day) * parseInt(rx.number_of_days);
+        const totalQty = dosagePerTime * timesPerDay * numDays;
 
         // Lock the drug row and verify sufficient stock
         const [drugRows] = await conn.execute(
@@ -387,7 +409,7 @@ const saveConsultation = async (req, res) => {
           await conn.rollback();
           conn.release();
           return res.status(400).json({
-            error: `Insufficient stock for drug ${rx.drug_id}. Available: ${drugRows[0].quantity}`
+            error: `Insufficient stock for drug ${rx.drug_name || rx.drug_id}. Available: ${drugRows[0].quantity}`
           });
         }
 
@@ -415,14 +437,14 @@ const saveConsultation = async (req, res) => {
         [
           prescriptionId,
           recordId,
-          rx.is_external ? null : (rx.drug_id || null),
-          rx.is_external ? rx.external_drug_name : null,
-          rx.drug_type,
-          rx.times_per_day,
-          rx.dosage_per_time,
-          rx.dosage_unit,
-          rx.number_of_days,
-          rx.is_external ? 1 : 0
+          isExternal ? null : (rx.drug_id || null),
+          isExternal ? (rx.external_drug_name || rx.drug_name) : null,
+          drugType,
+          timesPerDay,
+          dosagePerTime,
+          dosageUnit,
+          numDays,
+          isExternal
         ]
       );
     }

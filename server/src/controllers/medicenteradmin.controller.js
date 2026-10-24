@@ -176,7 +176,8 @@ const getSchedules = async (req, res) => {
 const createSchedule = async (req, res) => {
   try {
     const { centerId } = req.user;
-    const { doctor_id, day_of_week, start_time, end_time, patient_amount } = req.body;
+    const doctor_id = req.body.doctor_id || req.body.doctorId;
+    const { day_of_week, start_time, end_time, patient_amount } = req.body;
 
     if (!doctor_id || !day_of_week || !start_time || !end_time) {
       return res.status(400).json({ error: 'doctor_id, day_of_week, start_time, end_time are required' });
@@ -312,18 +313,22 @@ const createTemporaryPatient = async (req, res) => {
 const getPatients = async (req, res) => {
   try {
     const { centerId } = req.user;
+    const { type } = req.query;
 
-    // Patients who have visited this center OR are temporary patients of this center
-    const result = await db.query(
-      `SELECT DISTINCT p.patient_id, p.name, p.email, p.phone,
-                       p.date_of_birth, p.patient_type, p.created_at
-       FROM patient p
-       LEFT JOIN visit_record vr ON vr.patient_id = p.patient_id AND vr.center_id = ?
-       WHERE vr.patient_id IS NOT NULL
-          OR (p.patient_type = 'Temporary' AND p.center_id = ?)
-       ORDER BY p.name`,
-      [centerId, centerId]
-    );
+    let query = `SELECT DISTINCT p.patient_id, p.name, p.email, p.phone,
+                         p.date_of_birth, p.patient_type, p.created_at
+         FROM patient p
+         LEFT JOIN visit_record vr ON vr.patient_id = p.patient_id AND vr.center_id = ?
+         WHERE (vr.patient_id IS NOT NULL OR (p.patient_type = 'Temporary' AND p.center_id = ?))`;
+    const params = [centerId, centerId];
+
+    if (type) {
+      query += ' AND p.patient_type = ?';
+      params.push(type);
+    }
+    query += ' ORDER BY p.name';
+
+    const result = await db.query(query, params);
     return res.json(result.rows);
   } catch (err) {
     console.error('getPatients error:', err);
@@ -358,7 +363,10 @@ const addDrug = async (req, res) => {
     await conn.beginTransaction();
 
     const { centerId, id: adminId } = req.user;
-    const { drug_name, drug_type, dosage_unit, quantity } = req.body;
+    const drug_name = req.body.drug_name || req.body.name;
+    const drug_type = req.body.drug_type || req.body.type;
+    const dosage_unit = req.body.dosage_unit;
+    const quantity = req.body.quantity;
 
     if (!drug_name || !drug_type || !dosage_unit) {
       await conn.rollback();
@@ -434,8 +442,9 @@ const updateDrug = async (req, res) => {
 
     let newQuantity = parseFloat(drugRows[0].quantity);
 
-    if (quantity !== undefined && change_type) {
+    if (quantity !== undefined) {
       const qty = parseFloat(quantity);
+      const diff = qty - parseFloat(drugRows[0].quantity);
       if (change_type === 'Addition') {
         newQuantity = newQuantity + qty;
       } else if (change_type === 'Reduction') {
@@ -445,7 +454,8 @@ const updateDrug = async (req, res) => {
           conn.release();
           return res.status(400).json({ error: 'Insufficient stock' });
         }
-      } else if (change_type === 'Correction') {
+      } else {
+        // Direct assignment / Correction
         newQuantity = qty;
       }
 
@@ -453,7 +463,7 @@ const updateDrug = async (req, res) => {
       await conn.execute(
         `INSERT INTO drug_inventory_log (log_id, drug_id, change_type, quantity_changed, notes, changed_by)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [logId, id, change_type, qty, notes || null, adminId]
+        [logId, id, change_type || 'Correction', Math.abs(diff), notes || 'Quantity update', adminId]
       );
     }
 
@@ -708,9 +718,35 @@ const getNotificationDetails = async (req, res) => {
       [recordId]
     );
 
+    // Fetch center details
+    const centerRes = await db.query('SELECT * FROM medi_center WHERE center_id = ?', [centerId]);
+    const center = centerRes.rows[0];
+
+    const internalPrescriptions = prescriptions.rows.filter(p => !p.is_external);
+    const externalPrescriptions = prescriptions.rows.filter(p => p.is_external);
+
+    let patientAge = null;
+    if (record.date_of_birth) {
+      patientAge = Math.floor((new Date() - new Date(record.date_of_birth)) / (365.25 * 24 * 60 * 60 * 1000));
+    }
+
     return res.json({
       visit: record,
-      prescriptions: prescriptions.rows,
+      record: record,
+      doctor: {
+        name: record.doctor_name,
+        specialty: record.specialty
+      },
+      center: center || { center_name: 'Medical Center', location: '', phsrc_number: '' },
+      patient: {
+        name: record.patient_name,
+        phone: record.phone,
+        date_of_birth: record.date_of_birth,
+        age: patientAge
+      },
+      prescriptions: internalPrescriptions,
+      external_prescriptions: externalPrescriptions,
+      all_prescriptions: prescriptions.rows,
       tests: tests.rows,
       revisit: revisit.rows[0] || null
     });
@@ -732,7 +768,8 @@ const bookAppointmentForTemp = async (req, res) => {
 
     const { centerId } = req.user;
     const { patientId } = req.params;
-    const { doctor_id, visit_date } = req.body;
+    const doctor_id = req.body.doctor_id || req.body.doctorId;
+    const { visit_date } = req.body;
 
     if (!doctor_id || !visit_date) {
       await conn.rollback();

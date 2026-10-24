@@ -81,13 +81,27 @@ export default function DoctorQueue() {
                         </span>
                       </td>
                       <td className="py-3 px-4">
-                        {appt.status === 'CheckedIn' && (
+                        {appt.status === 'CheckedIn' ? (
                           <button
-                            onClick={() => navigate('/doctor/consultation', { state: { appointment: appt } })}
+                            onClick={() => navigate('/doctor/consultation', {
+                              state: {
+                                appointment: appt,
+                                patient: {
+                                  patient_id: appt.patient_id,
+                                  name: appt.patient_name,
+                                  phone: appt.phone,
+                                  email: appt.email,
+                                  date_of_birth: appt.date_of_birth,
+                                  patient_type: appt.patient_type
+                                }
+                              }
+                            })}
                             className="text-xs btn-primary py-1 px-3"
                           >
                             Open Consultation
                           </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">—</span>
                         )}
                       </td>
                     </tr>

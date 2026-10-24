@@ -45,7 +45,7 @@ export default function Patients() {
 
   const bookApptMutation = useMutation({
     mutationFn: ({ patientId, ...data }) =>
-      api.post(`/admin/patients/${patientId}/appointment`, data),
+      api.post(`/admin/patients/${patientId}/appointment`, { ...data, doctor_id: data.doctorId }),
     onSuccess: () => {
       toast.success('Appointment booked!');
       setApptModal({ open: false, patient: null });
@@ -155,7 +155,7 @@ export default function Patients() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            bookApptMutation.mutate({ patientId: apptModal.patient.id, ...apptForm });
+            bookApptMutation.mutate({ patientId: apptModal.patient?.patient_id || apptModal.patient?.id, ...apptForm });
           }}
           className="space-y-4"
         >
@@ -163,8 +163,8 @@ export default function Patients() {
             <label className="label">Doctor</label>
             <select className="input" value={apptForm.doctorId} onChange={setA('doctorId')} required>
               <option value="">Select a doctor…</option>
-              {doctors.filter(d => d.status === 'approved').map((d) => (
-                <option key={d.id} value={d.id}>{d.name} — {d.specialty}</option>
+              {doctors.filter(d => (d.approval_status === 'Approved' || d.status === 'approved')).map((d) => (
+                <option key={d.doctor_id || d.id} value={d.doctor_id || d.id}>Dr. {d.name} — {d.specialty}</option>
               ))}
             </select>
           </div>

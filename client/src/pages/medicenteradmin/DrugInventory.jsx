@@ -7,12 +7,14 @@ import Table from '../../components/UI/Table';
 import LoadingSpinner from '../../components/UI/LoadingSpinner';
 import api from '../../utils/api';
 
+const DRUG_TYPES = ['Tablet', 'Syrup', 'Injection', 'Capsule', 'Cream', 'Drops', 'Other'];
+
 export default function DrugInventory() {
   const qc = useQueryClient();
   const [addModal, setAddModal] = useState(false);
   const [qtyModal, setQtyModal] = useState({ open: false, drug: null });
   const [logModal, setLogModal] = useState(false);
-  const [form, setForm] = useState({ name: '', type: '', dosage_unit: '', quantity: 0 });
+  const [form, setForm] = useState({ name: '', type: 'Tablet', dosage_unit: 'tablet(s)', quantity: 0 });
   const [qty, setQty] = useState(0);
 
   const { data: drugs = [], isLoading } = useQuery({
@@ -27,11 +29,16 @@ export default function DrugInventory() {
   });
 
   const addMutation = useMutation({
-    mutationFn: (data) => api.post('/admin/inventory', data),
+    mutationFn: (data) => api.post('/admin/inventory', {
+      drug_name: data.name,
+      drug_type: data.type,
+      dosage_unit: data.dosage_unit,
+      quantity: data.quantity,
+    }),
     onSuccess: () => {
       toast.success('Drug added to inventory!');
       setAddModal(false);
-      setForm({ name: '', type: '', dosage_unit: '', quantity: 0 });
+      setForm({ name: '', type: 'Tablet', dosage_unit: 'tablet(s)', quantity: 0 });
       qc.invalidateQueries({ queryKey: ['admin-inventory'] });
     },
     onError: (err) => toast.error(err.response?.data?.error ?? err.response?.data?.message ?? 'Failed to add drug.'),
@@ -51,8 +58,8 @@ export default function DrugInventory() {
   const set = (f) => (e) => setForm({ ...form, [f]: e.target.value });
 
   const columns = [
-    { key: 'name', header: 'Drug Name', render: (r) => <span className="font-medium">{r.name}</span> },
-    { key: 'type', header: 'Type' },
+    { key: 'drug_name', header: 'Drug Name', render: (r) => <span className="font-medium">{r.drug_name || r.name}</span> },
+    { key: 'drug_type', header: 'Type', render: (r) => r.drug_type || r.type },
     { key: 'dosage_unit', header: 'Dosage Unit' },
     {
       key: 'quantity', header: 'In Stock',
@@ -99,18 +106,20 @@ export default function DrugInventory() {
 
       {/* Add Drug Modal */}
       <Modal isOpen={addModal} onClose={() => setAddModal(false)} title="Add Drug to Inventory">
-        <form onSubmit={(e) => { e.preventDefault(); addMutation.mutate({ ...form, quantity: parseInt(form.quantity) }); }} className="space-y-4">
+        <form onSubmit={(e) => { e.preventDefault(); addMutation.mutate(form); }} className="space-y-4">
           <div>
             <label className="label">Drug Name</label>
-            <input type="text" className="input" placeholder="e.g. Amoxicillin" value={form.name} onChange={set('name')} required />
+            <input type="text" className="input" placeholder="e.g. Paracetamol" value={form.name} onChange={set('name')} required />
           </div>
           <div>
-            <label className="label">Type / Category</label>
-            <input type="text" className="input" placeholder="e.g. Antibiotic" value={form.type} onChange={set('type')} required />
+            <label className="label">Drug Type</label>
+            <select className="input" value={form.type} onChange={set('type')}>
+              {DRUG_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
           </div>
           <div>
             <label className="label">Dosage Unit</label>
-            <input type="text" className="input" placeholder="e.g. 500mg, 10ml" value={form.dosage_unit} onChange={set('dosage_unit')} required />
+            <input type="text" className="input" placeholder="e.g. tablet(s), ml, mg" value={form.dosage_unit} onChange={set('dosage_unit')} required />
           </div>
           <div>
             <label className="label">Initial Quantity</label>
@@ -135,7 +144,7 @@ export default function DrugInventory() {
       <Modal
         isOpen={qtyModal.open}
         onClose={() => setQtyModal({ open: false, drug: null })}
-        title={`Update Quantity — ${qtyModal.drug?.name}`}
+        title={`Update Quantity — ${qtyModal.drug?.drug_name || qtyModal.drug?.name}`}
       >
         <div className="space-y-4">
           <p className="text-sm text-gray-500">
@@ -146,14 +155,14 @@ export default function DrugInventory() {
             <input
               type="number" min={0} className="input"
               value={qty}
-              onChange={(e) => setQty(parseInt(e.target.value))}
+              onChange={(e) => setQty(parseInt(e.target.value) || 0)}
             />
           </div>
           <div className="flex gap-3 justify-end pt-2">
             <button className="btn-secondary" onClick={() => setQtyModal({ open: false, drug: null })}>Cancel</button>
             <button
               className="btn-primary"
-              onClick={() => updateQtyMutation.mutate({ id: qtyModal.drug.id, quantity: qty })}
+              onClick={() => updateQtyMutation.mutate({ id: qtyModal.drug?.drug_id || qtyModal.drug?.id, quantity: qty })}
               disabled={updateQtyMutation.isPending}
             >
               {updateQtyMutation.isPending ? 'Saving…' : 'Save'}
@@ -169,18 +178,20 @@ export default function DrugInventory() {
         ) : logs.length === 0 ? (
           <p className="text-sm text-gray-400 text-center py-8">No log entries yet.</p>
         ) : (
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
             {logs.map((entry) => (
-              <div key={entry.id} className="py-3 flex items-center justify-between text-sm">
+              <div key={entry.log_id || entry.id} className="py-3 flex items-center justify-between text-sm">
                 <div>
-                  <p className="font-medium text-gray-800">{entry.drug?.name}</p>
-                  <p className="text-xs text-gray-400">{new Date(entry.createdAt).toLocaleString()}</p>
+                  <p className="font-medium text-gray-800">{entry.drug_name || entry.drug?.name || 'Drug'}</p>
+                  <p className="text-xs text-gray-400">
+                    {entry.changed_at ? new Date(entry.changed_at).toLocaleString() : (entry.createdAt ? new Date(entry.createdAt).toLocaleString() : '')}
+                  </p>
                 </div>
                 <div className="text-right">
-                  <p className={`font-semibold ${entry.change > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {entry.change > 0 ? `+${entry.change}` : entry.change}
+                  <p className={`font-semibold ${entry.change_type === 'Addition' ? 'text-green-600' : 'text-red-600'}`}>
+                    {entry.change_type === 'Addition' ? `+${entry.quantity_changed}` : `-${entry.quantity_changed}`}
                   </p>
-                  <p className="text-xs text-gray-400">{entry.reason}</p>
+                  <p className="text-xs text-gray-400">{entry.notes || entry.change_type}</p>
                 </div>
               </div>
             ))}
